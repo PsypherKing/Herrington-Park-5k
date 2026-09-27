@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
+  <meta name="mrbd-web-app-capable" content="yes">
+  <title>Herrington 5K</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 600px; height: 600px; overflow: hidden;
+      background: #000; color: #00f0ff;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    canvas { position: absolute; top: 0; left: 0; width: 600px; height: 600px; }
+    .hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+    .top-left {
+      position: absolute; top: 14px; left: 18px;
+      font-size: 26px; font-weight: 700; text-shadow: 0 0 12px #00f0ff;
+    }
+    .top-right {
+      position: absolute; top: 14px; right: 18px; text-align: right;
+    }
+    .label { font-size: 12px; opacity: 0.7; }
+    .value { font-size: 22px; font-weight: 700; }
+    .center-status {
+      position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.65); border: 2px solid #00f0ff;
+      border-radius: 24px; padding: 8px 22px; font-size: 16px; font-weight: 700;
+    }
+    .bottom-bar {
+      position: absolute; bottom: 14px; left: 16px; right: 16px;
+      display: flex; justify-content: space-between; font-size: 15px; font-weight: 600;
+    }
+    .controls {
+      position: absolute; bottom: 48px; left: 0; right: 0;
+      display: flex; justify-content: center; gap: 12px; z-index: 30;
+    }
+    .ctrl-btn {
+      background: rgba(0,0,0,0.7); color: #00f0ff;
+      border: 2px solid #00f0ff; border-radius: 24px;
+      padding: 8px 16px; font-size: 15px; font-weight: 700; min-width: 90px;
+    }
+    .ctrl-btn:focus { outline: 3px solid #fff; outline-offset: 2px; }
+    .ctrl-btn.active { background: #00f0ff; color: #000; }
+    .ctrl-btn.reset { border-color: #ff6b6b; color: #ff6b6b; }
+    .top-controls {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; z-index: 30;
+    }
+    .small-btn {
+      background: rgba(0,240,255,0.12); color: #00f0ff;
+      border: 1px solid #00f0ff; border-radius: 16px;
+      padding: 5px 12px; font-size: 13px; font-weight: 600;
+    }
+    .small-btn:focus { outline: 3px solid #fff; }
+  </style>
+</head>
+<body>
+  <canvas id="trail"></canvas>
+
+  <div class="hud">
+    <div class="top-left">
+      <div id="distance">0.00 KM</div>
+      <div style="font-size:14px; margin-top:2px;" id="calories">0 kcal</div>
+    </div>
+    <div class="top-right">
+      <div class="label">PACE / KM</div>
+      <div class="value" id="pace">--:--</div>
+    </div>
+    <div class="center-status" id="status">READY</div>
+    <div class="bottom-bar">
+      <div>SPEED <span id="speed">0.0</span></div>
+      <div id="time">00:00</div>
+    </div>
+  </div>
+
+  <div class="top-controls">
+    <button class="small-btn" id="dirBtn">Anti-Clockwise</button>
+    <button class="small-btn" id="weightBtn">77 kg</button>
+  </div>
+
+  <div class="controls">
+    <button class="ctrl-btn" id="toggleBtn">START</button>
+    <button class="ctrl-btn reset" id="resetBtn">RESET</button>
+  </div>
+
+  <script>
+    // Approximate Herrington Country Park 5 km route
+    // Based on public parkrun course description (start/finish near amphitheatre & boating lake)
+    const ROUTE_ANTI = [  // Anti-clockwise (most common)
+      {lat: 54.87880, lon: -1.47280},
+      {lat: 54.87950, lon: -1.47100},
+      {lat: 54.88000, lon: -1.46880},
+      {lat: 54.87970, lon: -1.46620},
+      {lat: 54.87860, lon: -1.46450},
+      {lat: 54.87720, lon: -1.46390},
+      {lat: 54.87570, lon: -1.46480},
+      {lat: 54.87450, lon: -1.46660},
+      {lat: 54.87390, lon: -1.46900},
+      {lat: 54.87440, lon: -1.47160},
+      {lat: 54.87570, lon: -1.47340},
+      {lat: 54.87720, lon: -1.47400},
+      {lat: 54.87850, lon: -1.47340},
+      {lat: 54.87880, lon: -1.47280}
+    ];
+
+    const ROUTE_CLOCK = [  // Clockwise version
+      {lat: 54.87880, lon: -1.47280},
+      {lat: 54.87850, lon: -1.47340},
+      {lat: 54.87720, lon: -1.47400},
+      {lat: 54.87570, lon: -1.47340},
+      {lat: 54.87440, lon: -1.47160},
+      {lat: 54.87390, lon: -1.46900},
+      {lat: 54.87450, lon: -1.46660},
+      {lat: 54.87570, lon: -1.46480},
+      {lat: 54.87720, lon: -1.46390},
+      {lat: 54.87860, lon: -1.46450},
+      {lat: 54.87970, lon: -1.46620},
+      {lat: 54.88000, lon: -1.46880},
+      {lat: 54.87950, lon: -1.47100},
+      {lat: 54.87880, lon: -1.47280}
+    ];
+
+    let currentRoute = ROUTE_ANTI;
+    let isAntiClockwise = true;
+
+    const WEIGHTS = [60, 70, 77, 85, 95];
+    let weightIndex = 2;
+    let weight = WEIGHTS[weightIndex];
+
+    const canvas = document.getElementById('trail');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 600;
+    canvas.height = 600;
+
+    let watchId = null;
+    let positions = [];
+    let totalDistance = 0;
+    let startTime = null;
+    let elapsedBefore = 0;
+    let lastPos = null;
+    let currentSpeed = 0;
+    let isTracking = false;
+    let originLat = null, originLon = null;
+    const SCALE = 27000;
+
+    const toggleBtn = document.getElementById('toggleBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const dirBtn = document.getElementById('dirBtn');
+    const weightBtn = document.getElementById('weightBtn');
+    const statusEl = document.getElementById('status');
+
+    function toXY(lat, lon) {
+      if (originLat === null) {
+        originLat = lat;
+        originLon = lon;
+      }
+      return {
+        x: 300 + (lon - originLon) * SCALE,
+        y: 300 - (lat - originLat) * SCALE
+      };
+    }
+
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+                Math.sin(dLon/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function formatPace(ms) {
+      if (!ms || ms < 0.3) return '--:--';
+      const sec = 1000 / ms;
+      return `${Math.floor(sec/60)}:${Math.floor(sec%60).toString().padStart(2,'0')}`;
+    }
+
+    function formatTime(ms) {
+      const s = Math.floor(ms / 1000);
+      return `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+    }
+
+    function calcCalories() {
+      return Math.round((totalDistance / 1000) * weight);
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, 600, 600);
+
+      // Draw fixed route
+      if (originLat !== null) {
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(0, 200, 255, 0.55)';
+        ctx.lineWidth = 7;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        currentRoute.forEach((p, i) => {
+          const pt = toXY(p.lat, p.lon);
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        });
+        ctx.stroke();
+      }
+
+      // Live trail
+      if (positions.length > 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = '#00f0ff';
+        ctx.lineWidth = 5;
+        ctx.shadowColor = '#00f0ff';
+        ctx.shadowBlur = 10;
+        positions.forEach((p, i) => {
+          const pt = toXY(p.lat, p.lon);
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        });
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+
+      // Current position
+      if (positions.length > 0) {
+        const last = positions[positions.length - 1];
+        const pt = toXY(last.lat, last.lon);
+
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 20, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.25)';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 12, 0, Math.PI * 2);
+        ctx.fillStyle = '#00f0ff';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+    }
+
+    function updateUI() {
+      document.getElementById('distance').textContent = (totalDistance / 1000).toFixed(2) + ' KM';
+      document.getElementById('calories').textContent = calcCalories() + ' kcal';
+      document.getElementById('pace').textContent = formatPace(currentSpeed);
+      document.getElementById('speed').textContent = (currentSpeed * 3.6).toFixed(1);
+
+      let t = elapsedBefore;
+      if (isTracking && startTime) t += Date.now() - startTime;
+      document.getElementById('time').textContent = formatTime(t);
+    }
+
+    function onPosition(pos) {
+      if (!isTracking) return;
+
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      const speed = pos.coords.speed || 0;
+
+      if (lastPos) {
+        const d = haversine(lastPos.lat, lastPos.lon, lat, lon);
+        if (d > 1.0) {
+          totalDistance += d;
+          positions.push({ lat, lon });
+          if (positions.length > 400) positions.shift();
+        }
+      } else {
+        positions.push({ lat, lon });
+        originLat = lat;
+        originLon = lon;
+      }
+
+      lastPos = { lat, lon };
+      currentSpeed = speed > 0 ? speed : currentSpeed * 0.88;
+
+      draw();
+      updateUI();
+
+      statusEl.textContent = currentSpeed > 0.4 ? 'RUNNING' : 'SLOW';
+      statusEl.style.borderColor = '#00f0ff';
+      statusEl.style.color = '#00f0ff';
+    }
+
+    function onError(err) {
+      statusEl.textContent = err.code === 1 ? 'PERMISSION DENIED' : 'GPS ERROR';
+      statusEl.style.borderColor = '#ff6b6b';
+      statusEl.style.color = '#ff6b6b';
+      stopRun();
+    }
+
+    function startRun() {
+      isTracking = true;
+      startTime = Date.now();
+      lastPos = null;
+
+      toggleBtn.textContent = 'PAUSE';
+      toggleBtn.classList.add('active');
+      statusEl.textContent = 'STARTING GPS…';
+      statusEl.style.borderColor = '#00f0ff';
+      statusEl.style.color = '#00f0ff';
+
+      watchId = navigator.geolocation.watchPosition(onPosition, onError, {
+        enableHighAccuracy: true,
+        maximumAge: 600,
+        timeout: 10000
+      });
+
+      window.timer = setInterval(updateUI, 1000);
+    }
+
+    function stopRun() {
+      isTracking = false;
+      if (startTime) {
+        elapsedBefore += Date.now() - startTime;
+        startTime = null;
+      }
+      if (watchId) navigator.geolocation.clearWatch(watchId);
+      if (window.timer) clearInterval(window.timer);
+
+      currentSpeed = 0;
+      toggleBtn.textContent = 'START';
+      toggleBtn.classList.remove('active');
+      statusEl.textContent = 'PAUSED';
+      statusEl.style.borderColor = '#ffaa00';
+      statusEl.style.color = '#ffaa00';
+      updateUI();
+    }
+
+    function resetRun() {
+      stopRun();
+      totalDistance = 0;
+      elapsedBefore = 0;
+      positions = [];
+      lastPos = null;
+      originLat = null;
+      originLon = null;
+      currentSpeed = 0;
+      statusEl.textContent = 'READY';
+      statusEl.style.borderColor = '#00f0ff';
+      statusEl.style.color = '#00f0ff';
+      draw();
+      updateUI();
+    }
+
+    // Direction toggle
+    dirBtn.addEventListener('click', () => {
+      isAntiClockwise = !isAntiClockwise;
+      currentRoute = isAntiClockwise ? ROUTE_ANTI : ROUTE_CLOCK;
+      dirBtn.textContent = isAntiClockwise ? 'Anti-Clockwise' : 'Clockwise';
+      draw();
+    });
+
+    toggleBtn.addEventListener('click', () => {
+      if (isTracking) stopRun();
+      else startRun();
+    });
+
+    resetBtn.addEventListener('click', resetRun);
+
+    weightBtn.addEventListener('click', () => {
+      weightIndex = (weightIndex + 1) % WEIGHTS.length;
+      weight = WEIGHTS[weightIndex];
+      weightBtn.textContent = weight + ' kg';
+      updateUI();
+    });
+
+    toggleBtn.focus();
+    setTimeout(() => toggleBtn.focus(), 300);
+  </script>
+</body>
+</html>
